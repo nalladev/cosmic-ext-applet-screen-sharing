@@ -2,6 +2,8 @@
 
 A screen-sharing applet for the [COSMIC](https://system76.com/cosmic) desktop. Share your screen to wired displays (HDMI / VGA / DisplayPort) and wireless FCast receivers from a single place in the panel.
 
+## Features
+
 ## Installing
 
 Download the `.deb`, `.rpm`, or tarball from the [releases page](https://github.com/nalladev/cosmic-ext-applet-screen-sharing/releases/latest), or install from the COSMIC Store.
