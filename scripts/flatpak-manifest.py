@@ -22,7 +22,7 @@ Usage:
 import argparse
 import json
 
-MANIFEST = "flatpak/io.github.nalladev.CosmicExtAppletScreenSharing.json"
+MANIFEST = "flatpak/io.github.nalladev.cosmic-ext-applet-screen-sharing.json"
 DIR_SOURCE = {"type": "dir", "path": ".."}
 
 
@@ -44,7 +44,9 @@ def main() -> None:
     to_dir = sub.add_parser("to-dir", help="write a local-build copy with a dir source")
     to_dir.add_argument("output", help="path for the local-build manifest copy")
 
-    to_git = sub.add_parser("to-git", help="point the manifest at a release tag (in place)")
+    to_git = sub.add_parser(
+        "to-git", help="point the manifest at a release tag (in place)"
+    )
     to_git.add_argument("version")
     to_git.add_argument("repo_url")
     to_git.add_argument("manifest", nargs="?", default=MANIFEST)

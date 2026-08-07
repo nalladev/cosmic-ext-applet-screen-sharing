@@ -103,12 +103,12 @@ jobs:
       - name: Build Flatpak
         run: |
           flatpak-builder --force-clean --ccache --mirror-screenshots-url=https://dl.flathub.org/media/ \
-            --install-deps-from=flathub --repo=flatpak-repo build-dir flatpak/io.github.nalladev.CosmicExtAppletScreenSharing.json
+            --install-deps-from=flathub --repo=flatpak-repo build-dir flatpak/io.github.nalladev.cosmic-ext-applet-screen-sharing.json
 
       - name: Create Flatpak bundle
         run: |
           flatpak build-bundle flatpak-repo cosmic-ext-applet-screen-sharing.flatpak \
-            io.github.nalladev.CosmicExtAppletScreenSharing
+            io.github.nalladev.cosmic-ext-applet-screen-sharing
 
       - name: Upload Flatpak artifact
         uses: actions/upload-artifact@v4

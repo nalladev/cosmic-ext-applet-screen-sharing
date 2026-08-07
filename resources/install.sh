@@ -12,6 +12,6 @@ mkdir -p ~/.local/bin \
 cp ./cosmic-ext-applet-screen-sharing ~/.local/bin/
 cp ./*.desktop "${XDG_DATA_HOME:-~/.local/share}/applications/"
 cp ./*.metainfo.xml "${XDG_DATA_HOME:-~/.local/share}/appdata/"
-cp ./*.svg "${XDG_DATA_HOME:-~/.local/share}/icons/hicolor/scalable/apps/io.github.nalladev.CosmicExtAppletScreenSharing-symbolic.svg"
+cp ./*.svg "${XDG_DATA_HOME:-~/.local/share}/icons/hicolor/scalable/apps/io.github.nalladev.cosmic-ext-applet-screen-sharing-symbolic.svg"
 
 echo "Installed. Restart cosmic-panel (pkill cosmic-panel) then add the applet."

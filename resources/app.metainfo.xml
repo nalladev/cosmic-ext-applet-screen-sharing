@@ -1,6 +1,6 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8" ?>
 <component type="desktop-application">
-  <id>io.github.nalladev.CosmicExtAppletScreenSharing</id>
+  <id>io.github.nalladev.cosmic-ext-applet-screen-sharing</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MPL-2.0</project_license>
   <name>Screen Sharing</name>
@@ -21,11 +21,21 @@
       <li>Share the entire screen or a single window</li>
     </ul>
   </description>
-  <icon type="stock">io.github.nalladev.CosmicExtAppletScreenSharing-symbolic</icon>
-  <url type="homepage">https://github.com/nalladev/cosmic-ext-applet-screen-sharing</url>
-  <url type="bugtracker">https://github.com/nalladev/cosmic-ext-applet-screen-sharing/issues</url>
-  <url type="vcs-browser">https://github.com/nalladev/cosmic-ext-applet-screen-sharing</url>
-  <launchable type="desktop-id">io.github.nalladev.CosmicExtAppletScreenSharing.desktop</launchable>
+  <icon
+        type="stock"
+    >io.github.nalladev.cosmic-ext-applet-screen-sharing-symbolic</icon>
+  <url
+        type="homepage"
+    >https://github.com/nalladev/cosmic-ext-applet-screen-sharing</url>
+  <url
+        type="bugtracker"
+    >https://github.com/nalladev/cosmic-ext-applet-screen-sharing/issues</url>
+  <url
+        type="vcs-browser"
+    >https://github.com/nalladev/cosmic-ext-applet-screen-sharing</url>
+  <launchable
+        type="desktop-id"
+    >io.github.nalladev.cosmic-ext-applet-screen-sharing.desktop</launchable>
   <provides>
     <id>com.system76.CosmicApplet</id>
     <binary>cosmic-ext-applet-screen-sharing</binary>
@@ -54,7 +64,9 @@
       <description>
         <p>Initial project scaffold for the screen sharing applet.</p>
       </description>
-      <url type="details">https://github.com/nalladev/cosmic-ext-applet-screen-sharing/releases/tag/v0.1.0</url>
+      <url
+                type="details"
+            >https://github.com/nalladev/cosmic-ext-applet-screen-sharing/releases/tag/v0.1.0</url>
     </release>
   </releases>
 </component>
