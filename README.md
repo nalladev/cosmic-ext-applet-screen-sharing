@@ -2,15 +2,6 @@
 
 A screen-sharing applet for the [COSMIC](https://system76.com/cosmic) desktop. Share your screen to wired displays (HDMI / VGA / DisplayPort) and wireless FCast receivers from a single place in the panel.
 
-> **Status:** project scaffold — wired display detection, FCast receiver discovery, and sharing flows are planned (see [pop-os/cosmic-applets discussion #1240](https://github.com/pop-os/cosmic-applets/discussions/1240)).
-
-## Features
-
-- **Wired displays** — detect monitors connected via HDMI, VGA, or DisplayPort
-- **FCast receivers** — discover wireless FCast targets on your network
-- **Share what you want** — share the entire screen or a single window
-- **One place for everything** — pick any target from a single popup in the panel, no separate tools needed
-
 ## Installing
 
 Download the `.deb`, `.rpm`, or tarball from the [releases page](https://github.com/nalladev/cosmic-ext-applet-screen-sharing/releases/latest), or install from the COSMIC Store.
