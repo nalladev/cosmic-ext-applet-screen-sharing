@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=Screen Sharing
-Comment=Screen sharing applet for cosmic desktop. Share your screen to wired displays and wireless receivers.
+Name=Cosmic Ext Applet Screen Sharing
+Comment=COSMIC applet for screen sharing to wired displays and wireless (FCast) receivers
 Type=Application
-Icon=io.github.nalladev.CosmicExtAppletScreenSharing-symbolic
-Exec=cosmic-ext-applet-screen-sharing
+Icon=io.github.nalladev.CosmicExtAppletScreenSharing
+Exec=cosmic-ext-applet-screen-sharing %F
 Terminal=false
 StartupNotify=true
 Categories=COSMIC
