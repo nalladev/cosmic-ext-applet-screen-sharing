@@ -1,0 +1,65 @@
+[package]
+name = "cosmic-ext-applet-screen-sharing"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Screen sharing applet for cosmic desktop. Share your screen to wired displays and wireless receivers."
+repository = "https://github.com/nalladev/cosmic-ext-applet-screen-sharing"
+
+[dependencies]
+anyhow = "1"
+env_logger = "0.11"
+i18n-embed-fl = "0.10"
+log = "0.4"
+rust-embed = "8.7.2"
+serde = { version = "1", features = ["derive"] }
+zbus = { version = "5.15", default-features = false, features = ["blocking-api", "tokio"] }
+
+[dependencies.i18n-embed]
+version = "0.16"
+features = ["fluent-system", "desktop-requester"]
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+# See https://github.com/pop-os/libcosmic/blob/master/Cargo.toml for available features.
+features = [
+    # Applet support
+    "applet",
+    "applet-token",
+    # Uses cosmic-settings-daemon to watch for config file changes
+    "dbus-config",
+    # Support creating additional application windows.
+    "multi-window",
+    # D-Bus activation support (single-instance applets).
+    "single-instance",
+    # Uses tokio as the executor for the runtime
+    "tokio",
+    # Add Wayland support to winit
+    "wayland",
+    # Windowing support for X11, Windows, Mac, & Redox
+    "winit",
+]
+
+# Uncomment to test a locally-cloned libcosmic
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+
+[package.metadata.deb]
+license-file = "LICENSE"
+assets = [
+  ["target/release/cosmic-ext-applet-screen-sharing", "usr/bin/", "755"],
+  ["resources/app.desktop", "usr/share/applications/io.github.nalladev.CosmicExtAppletScreenSharing.desktop", "644"],
+  ["resources/app.metainfo.xml", "usr/share/appdata/io.github.nalladev.CosmicExtAppletScreenSharing.metainfo.xml", "644"],
+  ["resources/icon.svg", "usr/share/icons/hicolor/scalable/apps/io.github.nalladev.CosmicExtAppletScreenSharing-symbolic.svg", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/cosmic-ext-applet-screen-sharing", dest = "/usr/bin/cosmic-ext-applet-screen-sharing", mode = "755" },
+  { source = "LICENSE", dest = "/usr/share/doc/cosmic-ext-applet-screen-sharing/LICENSE", doc = true, mode = "644" },
+  { source = "resources/app.desktop", dest = "/usr/share/applications/io.github.nalladev.CosmicExtAppletScreenSharing.desktop", mode = "644" },
+  { source = "resources/app.metainfo.xml", dest = "/usr/share/appdata/io.github.nalladev.CosmicExtAppletScreenSharing.metainfo.xml", mode = "644" },
+  { source = "resources/icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.nalladev.CosmicExtAppletScreenSharing-symbolic.svg", mode = "644" },
+]

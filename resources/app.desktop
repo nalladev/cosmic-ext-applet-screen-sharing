@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Screen Sharing
+Comment=Screen sharing applet for cosmic desktop. Share your screen to wired displays and wireless receivers.
+Type=Application
+Icon=io.github.nalladev.CosmicExtAppletScreenSharing-symbolic
+Exec=cosmic-ext-applet-screen-sharing
+Terminal=false
+StartupNotify=true
+Categories=COSMIC
+Keywords=COSMIC
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+MimeType=

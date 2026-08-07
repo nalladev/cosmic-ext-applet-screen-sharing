@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.nalladev.CosmicExtAppletScreenSharing</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+  <name>Screen Sharing</name>
+  <developer id="com.github.nalladev">
+    <name>Joel</name>
+    <url type="homepage">https://github.com/nalladev</url>
+  </developer>
+  <summary>Screen sharing applet for COSMIC desktop</summary>
+  <description>
+    <p>
+      Share your screen to wired displays and wireless receivers from a single
+      place in the panel. Detect connected displays and FCast receivers, then
+      choose what to share and where.
+    </p>
+    <ul>
+      <li>Detect displays connected via HDMI, VGA, or DisplayPort</li>
+      <li>Discover FCast receivers on the network</li>
+      <li>Share the entire screen or a single window</li>
+    </ul>
+  </description>
+  <icon type="stock">io.github.nalladev.CosmicExtAppletScreenSharing-symbolic</icon>
+  <url type="homepage">https://github.com/nalladev/cosmic-ext-applet-screen-sharing</url>
+  <url type="bugtracker">https://github.com/nalladev/cosmic-ext-applet-screen-sharing/issues</url>
+  <url type="vcs-browser">https://github.com/nalladev/cosmic-ext-applet-screen-sharing</url>
+  <launchable type="desktop-id">io.github.nalladev.CosmicExtAppletScreenSharing.desktop</launchable>
+  <provides>
+    <id>com.system76.CosmicApplet</id>
+    <binary>cosmic-ext-applet-screen-sharing</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>COSMIC</keyword>
+    <keyword>screen-sharing</keyword>
+    <keyword>cast</keyword>
+    <keyword>display</keyword>
+    <keyword>fcast</keyword>
+  </keywords>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-08-07">
+      <description>
+        <p>Initial project scaffold for the screen sharing applet.</p>
+      </description>
+      <url type="details">https://github.com/nalladev/cosmic-ext-applet-screen-sharing/releases/tag/v0.1.0</url>
+    </release>
+  </releases>
+</component>
