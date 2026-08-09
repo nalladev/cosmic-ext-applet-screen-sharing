@@ -150,7 +150,7 @@ impl cosmic::Application for AppModel {
     fn view(&self) -> Element<'_, Self::Message> {
         self.core
             .applet
-            .icon_button("display-symbolic")
+            .icon_button("display-projector-symbolic")
             .on_press(Message::TogglePopup)
             .into()
     }
