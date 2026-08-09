@@ -1,43 +1,51 @@
-# Cosmic Ext Applet Screen Sharing
+# Screen Sharing
 
-COSMIC applet for screen sharing to wired displays and wireless (FCast) receivers
+A screen-sharing applet for the [COSMIC](https://system76.com/cosmic) desktop. Share your screen to wired displays (HDMI / VGA / DisplayPort) and wireless FCast receivers from a single place in the panel.
 
-## Installation
+## Features
 
-A [justfile](./justfile) is included by default for the [casey/just][just] command runner.
+## Installing
 
-- `just` builds the application with the default `just build-release` recipe
-- `just run` builds and runs the application
-- `just install` installs the project into the system
-- `just vendor` creates a vendored tarball
-- `just build-vendored` compiles with vendored dependencies from that tarball
-- `just check` runs clippy on the project to check for linter warnings
-- `just check-json` can be used by IDEs that support LSP
+Download the `.deb`, `.rpm`, or tarball from the [releases page](https://github.com/nalladev/cosmic-ext-applet-screen-sharing/releases/latest), or install from the COSMIC Store.
 
-## Translators
-
-[Fluent][fluent] is used for localization of the software. Fluent's translation files are found in the [i18n directory](./i18n). New translations may copy the [English (en) localization](./i18n/en) of the project, rename `en` to the desired [ISO 639-1 language code][iso-codes], and then translations can be provided for each [message identifier][fluent-guide]. If no translation is necessary, the message may be omitted.
-
-## Packaging
-
-If packaging for a Linux distribution, vendor dependencies locally with the `vendor` rule, and build with the vendored sources using the `build-vendored` rule. When installing files, use the `rootdir` and `prefix` variables to change installation paths.
+Then restart the panel and add the applet:
 
 ```sh
-just vendor
-just build-vendored
-just rootdir=debian/cosmic-ext-applet-screen-sharing prefix=/usr install
+pkill cosmic-panel
 ```
 
-It is recommended to build a source tarball with the vendored dependencies, which can typically be done by running `just vendor` on the host system before it enters the build environment.
+Open **Settings → Desktop → Panel → Applets** and enable **Screen Sharing**.
 
-## Developers
+## Building from source
 
-Developers should install [rustup][rustup] and configure their editor to use [rust-analyzer][rust-analyzer].
+Clone the repository and install with [just](https://github.com/casey/just):
 
-[fluent]: https://projectfluent.org/
-[fluent-guide]: https://projectfluent.org/fluent/guide/hello.html
-[iso-codes]: https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes
-[just]: https://github.com/casey/just
-[rustup]: https://rustup.rs/
-[rust-analyzer]: https://rust-analyzer.github.io/
-[sccache]: https://github.com/mozilla/sccache
+```sh
+git clone https://github.com/nalladev/cosmic-ext-applet-screen-sharing
+cd cosmic-ext-applet-screen-sharing
+just build-release
+sudo just install
+```
+
+Then restart the panel and add the applet as above.
+
+## Development
+
+```sh
+just build-release       # Release build
+just build-debug         # Debug build
+just run                 # Run standalone for testing
+sudo just install        # Install system-wide
+just check               # Type-check (cargo check)
+just lint                # Run clippy lints
+RUST_LOG=debug just run  # Run with verbose debug logging
+just flatpak-install     # Build and install the Flatpak from the working tree
+```
+
+## Contributing
+
+Contributions are welcome. Feel free to open issues or submit pull requests.
+
+## License
+
+[MPL-2.0](LICENSE)
