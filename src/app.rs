@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::activation;
-use crate::config::Config;
-use crate::fl;
-use cosmic::applet::padded_control;
+use std::sync::Arc;
+
+use ashpd::desktop::screencast::{
+    CursorMode, Screencast, SelectSourcesOptions, SourceType, StartCastOptions, Stream,
+};
+use ashpd::desktop::{CreateSessionOptions, PersistMode, ResponseError, Session};
+use cosmic::applet::{menu_button, padded_control};
 use cosmic::cctk::sctk::output::OutputInfo;
 use cosmic::cctk::wayland_client::protocol::wl_output::WlOutput;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
@@ -16,7 +19,14 @@ use cosmic::prelude::*;
 use cosmic::surface;
 use cosmic::surface::action::LiveSettings;
 use cosmic::theme;
-use cosmic::widget::{divider, text};
+use cosmic::widget::{button, divider, icon, scrollable, text};
+
+use crate::activation;
+use crate::config::Config;
+use crate::fl;
+
+/// Size of the icons used inside popup rows.
+const ICON_SIZE: u16 = 16;
 
 // ---------------------------------------------------------------------------
 // Command-line flags
@@ -42,6 +52,15 @@ pub struct AppModel {
     /// Displays (outputs) currently known to the compositor, kept up to
     /// date by `Message::OutputEvent`.
     outputs: Vec<OutputState>,
+    /// The currently running screen share, if any.
+    share: Option<ShareStatus>,
+    /// The portal session backing the running share. Kept alive so the
+    /// share can be stopped with `Message::StopShare`.
+    share_session: Option<ShareSession>,
+    /// True while the portal selection dialog is open.
+    share_pending: bool,
+    /// The last error from starting a share, shown in the popup.
+    share_error: Option<String>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -56,6 +75,20 @@ pub enum Message {
     /// A Wayland output (display) was created, removed, or changed
     /// geometry — i.e. a hotplug event.
     OutputEvent(Box<OutputEvent>, WlOutput),
+    /// Start sharing the entire screen.
+    StartShareScreen,
+    /// Start sharing a single window (the portal dialog asks which one).
+    StartShareWindow,
+    /// The screen cast portal finished selecting a source.
+    ShareStarted(ShareTarget, Result<(u32, ShareSession), String>),
+    /// The user cancelled the portal selection dialog.
+    ShareCancelled,
+    /// Stop the running share and close its portal session.
+    StopShare,
+    /// The share session has been closed.
+    ShareStopped,
+    /// Dismiss the share error shown in the popup.
+    DismissShareError,
 }
 
 impl cosmic::Application for AppModel {
@@ -100,6 +133,10 @@ impl cosmic::Application for AppModel {
             config,
             popup: None,
             outputs: Vec::new(),
+            share: None,
+            share_session: None,
+            share_pending: false,
+            share_error: None,
         };
 
         (app, Task::none())
@@ -192,62 +229,18 @@ impl cosmic::Application for AppModel {
 
             // A display was plugged in, unplugged, or changed geometry.
             Message::OutputEvent(o_event, wl_output) => {
-                match *o_event {
-                    OutputEvent::Created(Some(info)) => {
-                        if let Some(state) = OutputState::from_info(wl_output, info) {
-                            log::debug!(
-                                "[display] created: {} ({:?}) at {:?}, {}x{} logical",
-                                state.name,
-                                state.kind(),
-                                state.logical_pos,
-                                state.logical_size.0,
-                                state.logical_size.1,
-                            );
-                            self.outputs.push(state);
-                        }
-                    }
-                    OutputEvent::Created(None) => {}
-                    OutputEvent::Removed => {
-                        if let Some(removed) = self.outputs.iter().find(|o| o.output == wl_output) {
-                            log::debug!("[display] removed: {}", removed.name);
-                        }
-                        self.outputs.retain(|o| o.output != wl_output);
-                    }
-                    OutputEvent::InfoUpdate(info) => {
-                        if let Some(state) = self.outputs.iter_mut().find(|o| o.output == wl_output)
-                        {
-                            if let Some(name) = info.name {
-                                state.name = name;
-                            }
-                            if let Some((w, h)) = info.logical_size {
-                                state.logical_size =
-                                    (u32::try_from(w).unwrap_or(0), u32::try_from(h).unwrap_or(0));
-                            }
-                            if let Some(pos) = info.logical_position {
-                                state.logical_pos = pos;
-                            }
-                            log::debug!(
-                                "[display] updated: {} ({:?}) at {:?}, {}x{} logical",
-                                state.name,
-                                state.kind(),
-                                state.logical_pos,
-                                state.logical_size.0,
-                                state.logical_size.1,
-                            );
-                        } else if let Some(state) = OutputState::from_info(wl_output, info) {
-                            // Some compositors report full info without a prior
-                            // `Created` event — track the output anyway.
-                            log::debug!(
-                                "[display] created via info update: {} ({:?})",
-                                state.name,
-                                state.kind(),
-                            );
-                            self.outputs.push(state);
-                        }
-                    }
-                }
+                self.update_output_event(*o_event, wl_output);
                 Task::none()
             }
+
+            // Screen sharing.
+            Message::StartShareScreen
+            | Message::StartShareWindow
+            | Message::ShareStarted(..)
+            | Message::ShareCancelled
+            | Message::StopShare
+            | Message::ShareStopped
+            | Message::DismissShareError => self.update_share(message),
         }
     }
 
@@ -345,29 +338,402 @@ impl OutputState {
 }
 
 // ---------------------------------------------------------------------------
+// Screen sharing
+// ---------------------------------------------------------------------------
+
+/// A handle to an active screen cast portal session, shared between the
+/// message that starts the share and the model that later stops it.
+type ShareSession = Arc<Session<Screencast>>;
+
+/// What a screen share captures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareTarget {
+    /// The entire screen (all monitors).
+    Screen,
+    /// A single window, chosen by the user in the portal dialog.
+    Window,
+}
+
+impl ShareTarget {
+    /// The portal source type for this target.
+    fn source_type(self) -> SourceType {
+        match self {
+            Self::Screen => SourceType::Monitor,
+            Self::Window => SourceType::Window,
+        }
+    }
+}
+
+/// A running screen share.
+#[derive(Debug, Clone)]
+pub struct ShareStatus {
+    /// The `PipeWire` node id of the capture stream.
+    node_id: u32,
+    /// What is being shared.
+    target: ShareTarget,
+}
+
+/// Runs a screen cast session through the `XDG` Desktop Portal and returns
+/// the `PipeWire` node id of the capture stream, together with the session
+/// handle that must be kept alive (and later closed) to stop the share.
+async fn run_screencast(source: SourceType) -> anyhow::Result<(u32, Session<Screencast>)> {
+    let proxy = Screencast::new().await?;
+    let session = proxy
+        .create_session(CreateSessionOptions::default())
+        .await?;
+    proxy
+        .select_sources(
+            &session,
+            SelectSourcesOptions::default()
+                .set_sources(Some(source.into()))
+                .set_multiple(false)
+                .set_cursor_mode(CursorMode::Embedded)
+                .set_persist_mode(PersistMode::DoNot),
+        )
+        .await?;
+    let response = proxy
+        .start(&session, None, StartCastOptions::default())
+        .await?
+        .response()?;
+    let node_id = response
+        .streams()
+        .first()
+        .map(Stream::pipe_wire_node_id)
+        .ok_or_else(|| anyhow::anyhow!("no stream was selected"))?;
+    Ok((node_id, session))
+}
+
+// ---------------------------------------------------------------------------
 // Helper methods on AppModel
 // ---------------------------------------------------------------------------
 
 impl AppModel {
+    /// Apply a Wayland output (display) event to the tracked output list.
+    fn update_output_event(&mut self, o_event: OutputEvent, wl_output: WlOutput) {
+        match o_event {
+            OutputEvent::Created(Some(info)) => {
+                if let Some(state) = OutputState::from_info(wl_output, info) {
+                    log::debug!(
+                        "[display] created: {} ({:?}) at {:?}, {}x{} logical",
+                        state.name,
+                        state.kind(),
+                        state.logical_pos,
+                        state.logical_size.0,
+                        state.logical_size.1,
+                    );
+                    self.outputs.push(state);
+                }
+            }
+            OutputEvent::Created(None) => {}
+            OutputEvent::Removed => {
+                if let Some(removed) = self.outputs.iter().find(|o| o.output == wl_output) {
+                    log::debug!("[display] removed: {}", removed.name);
+                }
+                self.outputs.retain(|o| o.output != wl_output);
+            }
+            OutputEvent::InfoUpdate(info) => {
+                if let Some(state) = self.outputs.iter_mut().find(|o| o.output == wl_output) {
+                    if let Some(name) = info.name {
+                        state.name = name;
+                    }
+                    if let Some((w, h)) = info.logical_size {
+                        state.logical_size =
+                            (u32::try_from(w).unwrap_or(0), u32::try_from(h).unwrap_or(0));
+                    }
+                    if let Some(pos) = info.logical_position {
+                        state.logical_pos = pos;
+                    }
+                    log::debug!(
+                        "[display] updated: {} ({:?}) at {:?}, {}x{} logical",
+                        state.name,
+                        state.kind(),
+                        state.logical_pos,
+                        state.logical_size.0,
+                        state.logical_size.1,
+                    );
+                } else if let Some(state) = OutputState::from_info(wl_output, info) {
+                    // Some compositors report full info without a prior
+                    // `Created` event — track the output anyway.
+                    log::debug!(
+                        "[display] created via info update: {} ({:?})",
+                        state.name,
+                        state.kind(),
+                    );
+                    self.outputs.push(state);
+                }
+            }
+        }
+    }
+
+    /// Handles messages related to screen sharing.
+    fn update_share(&mut self, message: Message) -> Task<cosmic::Action<Message>> {
+        match message {
+            Message::StartShareScreen => self.start_share(ShareTarget::Screen),
+
+            Message::StartShareWindow => self.start_share(ShareTarget::Window),
+
+            // The portal reported a live capture stream.
+            Message::ShareStarted(target, Ok((node_id, session))) => {
+                self.share_pending = false;
+                self.share = Some(ShareStatus { node_id, target });
+                self.share_session = Some(session);
+                Task::none()
+            }
+
+            // The portal (or D-Bus) reported an error.
+            Message::ShareStarted(_, Err(error)) => {
+                self.share_pending = false;
+                self.share_error = Some(error);
+                Task::none()
+            }
+
+            // The user dismissed the portal selection dialog; not an error.
+            Message::ShareCancelled => {
+                self.share_pending = false;
+                Task::none()
+            }
+
+            Message::StopShare => {
+                let session = self.share_session.take();
+                self.share = None;
+                self.share_pending = false;
+                if let Some(session) = session {
+                    cosmic::task::future(async move {
+                        let _ = session.close().await;
+                        Message::ShareStopped
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+
+            Message::DismissShareError => {
+                self.share_error = None;
+                Task::none()
+            }
+
+            _ => Task::none(),
+        }
+    }
+
     /// Render the applet's popup window.
     fn view_popup(&self) -> Element<'_, Message> {
-        let Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
+        let Spacing {
+            space_xxs, space_s, ..
+        } = theme::active().cosmic().spacing;
 
         let heading =
             row![text::title4(fl!("app-title")), space::horizontal(),].align_y(Alignment::Center);
 
-        let placeholder = text::body(fl!("popup-placeholder"));
+        let divider = || padded_control(divider::horizontal::default()).padding([space_xxs, 0]);
 
-        let content = column![
-            padded_control(heading),
-            padded_control(divider::horizontal::default()).padding([space_xxs, 0]),
-            padded_control(placeholder),
-        ]
-        .padding([space_xxs, 0])
-        .spacing(0);
+        let mut children: Vec<Element<'_, Message>> = vec![
+            padded_control(heading).into(),
+            divider().into(),
+            share_window_row(self.can_start_share()),
+            wired_section(&self.outputs, self.can_start_share()),
+            divider().into(),
+            wireless_section(),
+        ];
 
-        self.core.applet.popup_container(content).into()
+        if self.share_pending {
+            children.push(
+                padded_control(
+                    row![
+                        cosmic::widget::progress_bar::indeterminate_circular().size(16.0),
+                        text::body(fl!("share-waiting")),
+                    ]
+                    .align_y(Alignment::Center)
+                    .spacing(space_s),
+                )
+                .into(),
+            );
+        }
+
+        if let Some(status) = &self.share {
+            children.push(share_status_row(status));
+        }
+
+        if let Some(error) = &self.share_error {
+            children.push(share_error_row(error));
+        }
+
+        let content = column::with_children(children)
+            .padding([space_xxs, 0])
+            .spacing(0);
+
+        self.core.applet.popup_container(scrollable(content)).into()
     }
+
+    /// Whether a new share can be started right now.
+    fn can_start_share(&self) -> bool {
+        self.share.is_none() && !self.share_pending
+    }
+
+    /// Start a screen cast for `target`, unless another share is already
+    /// running or waiting for the portal dialog.
+    fn start_share(&mut self, target: ShareTarget) -> Task<cosmic::Action<Message>> {
+        if !self.can_start_share() {
+            return Task::none();
+        }
+
+        self.share_pending = true;
+        self.share_error = None;
+        let source = target.source_type();
+
+        cosmic::task::future(async move {
+            match run_screencast(source).await {
+                Ok((node_id, session)) => {
+                    Message::ShareStarted(target, Ok((node_id, Arc::new(session))))
+                }
+                Err(error) => {
+                    // Cancelling the dialog is not an error.
+                    if let Some(ashpd::Error::Response(ResponseError::Cancelled)) =
+                        error.downcast_ref::<ashpd::Error>()
+                    {
+                        Message::ShareCancelled
+                    } else {
+                        Message::ShareStarted(target, Err(error.to_string()))
+                    }
+                }
+            }
+        })
+    }
+}
+
+/// A row that starts sharing a single window.
+fn share_window_row(can_start: bool) -> Element<'static, Message> {
+    let Spacing { space_s, .. } = theme::active().cosmic().spacing;
+
+    menu_button(
+        row![
+            icon::from_name("computer-symbolic").size(ICON_SIZE),
+            text::body(fl!("share-window")),
+            space::horizontal(),
+            icon::from_name("media-playback-start-symbolic").size(ICON_SIZE),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .on_press_maybe(can_start.then_some(Message::StartShareWindow))
+    .into()
+}
+
+/// The list of wired displays with a share action per row.
+fn wired_section(outputs: &[OutputState], can_start: bool) -> Element<'_, Message> {
+    let Spacing {
+        space_s, space_m, ..
+    } = theme::active().cosmic().spacing;
+
+    let header = cosmic::widget::container(text::caption_heading(fl!("section-wired")))
+        .padding([space_s, space_m])
+        .width(Length::Fill);
+
+    let mut children: Vec<Element<'_, Message>> = vec![header.into()];
+    let wired: Vec<&OutputState> = outputs
+        .iter()
+        .filter(|o| o.kind() == OutputKind::Wired)
+        .collect();
+
+    if wired.is_empty() {
+        children.push(padded_control(text::caption(fl!("no-wired-displays"))).into());
+    } else {
+        children.extend(wired.iter().map(|output| display_row(output, can_start)));
+    }
+
+    column::with_children(children).into()
+}
+
+/// A single wired display row: name, logical size, and a share action.
+fn display_row(output: &OutputState, can_start: bool) -> Element<'_, Message> {
+    let Spacing {
+        space_xxs, space_s, ..
+    } = theme::active().cosmic().spacing;
+
+    let size = format!("{} × {}", output.logical_size.0, output.logical_size.1);
+
+    menu_button(
+        row![
+            icon::from_name("display-projector-symbolic").size(ICON_SIZE),
+            column![text::body(&output.name), text::caption(size),]
+                .spacing(space_xxs)
+                .align_x(Alignment::Start),
+            space::horizontal(),
+            icon::from_name("media-playback-start-symbolic").size(ICON_SIZE),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .on_press_maybe(can_start.then_some(Message::StartShareScreen))
+    .into()
+}
+
+/// The wireless receivers section (a stub until `FCast` is supported).
+fn wireless_section() -> Element<'static, Message> {
+    let Spacing {
+        space_s, space_m, ..
+    } = theme::active().cosmic().spacing;
+
+    column![
+        cosmic::widget::container(text::caption_heading(fl!("section-wireless")))
+            .padding([space_s, space_m])
+            .width(Length::Fill),
+        padded_control(
+            row![
+                icon::from_name("network-wireless-symbolic").size(ICON_SIZE),
+                text::caption(fl!("wireless-stub")),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(space_s),
+        ),
+    ]
+    .into()
+}
+
+/// A row describing the running share, with a stop button.
+fn share_status_row(status: &ShareStatus) -> Element<'_, Message> {
+    let Spacing {
+        space_xxs, space_s, ..
+    } = theme::active().cosmic().spacing;
+
+    let label = match status.target {
+        ShareTarget::Screen => fl!("share-active-screen"),
+        ShareTarget::Window => fl!("share-active-window"),
+    };
+
+    padded_control(
+        row![
+            icon::from_name("media-playback-stop-symbolic").size(ICON_SIZE),
+            column![
+                text::body(label),
+                text::caption(fl!("share-node", node = status.node_id)),
+            ]
+            .spacing(space_xxs)
+            .align_x(Alignment::Start),
+            space::horizontal(),
+            button::destructive(fl!("stop-share")).on_press(Message::StopShare),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .into()
+}
+
+/// A row showing the last share error, with a dismiss button.
+fn share_error_row(error: &str) -> Element<'_, Message> {
+    let Spacing { space_s, .. } = theme::active().cosmic().spacing;
+
+    padded_control(
+        row![
+            icon::from_name("dialog-error-symbolic").size(ICON_SIZE),
+            text::body(error),
+            space::horizontal(),
+            button::standard(fl!("dismiss")).on_press(Message::DismissShareError),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .into()
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ repository = "https://github.com/nalladev/cosmic-ext-applet-screen-sharing"
 
 [dependencies]
 anyhow = "1"
+ashpd = { version = "0.13.13", features = ["screencast", "tokio"] }
 env_logger = "0.11"
 i18n-embed-fl = "0.10"
 log = "0.4"

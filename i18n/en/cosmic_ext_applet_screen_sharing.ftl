@@ -1,2 +1,12 @@
 app-title = Screen Sharing
-popup-placeholder = Sharing targets and receivers will appear here.
+section-wired = Wired displays
+section-wireless = Wireless receivers
+share-window = Share a window
+no-wired-displays = No wired displays detected
+wireless-stub = Wireless receivers (FCast) will appear here once supported.
+share-waiting = Choose what to share…
+share-active-screen = Sharing the screen
+share-active-window = Sharing a window
+share-node = PipeWire node { $node }
+stop-share = Stop sharing
+dismiss = Dismiss
