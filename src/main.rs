@@ -2,9 +2,12 @@
 
 mod activation;
 mod app;
+mod cast_screencast;
+mod cast_sdk;
 mod config;
 mod fcast;
 mod i18n;
+mod portal;
 
 use app::Flags;
 

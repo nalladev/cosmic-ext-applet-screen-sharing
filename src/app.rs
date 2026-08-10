@@ -2,16 +2,15 @@
 
 use std::sync::Arc;
 
-use ashpd::desktop::screencast::{
-    CursorMode, Screencast, SelectSourcesOptions, SourceType, StartCastOptions,
-};
-use ashpd::desktop::{CreateSessionOptions, PersistMode, ResponseError, Session};
+use ashpd::desktop::ResponseError;
+use ashpd::desktop::screencast::SourceType;
 use cosmic::applet::{menu_button, padded_control};
 use cosmic::cctk::sctk::output::OutputInfo;
 use cosmic::cctk::wayland_client::protocol::wl_output::WlOutput;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::core::event::wayland::OutputEvent;
+use cosmic::iced::futures::StreamExt;
 use cosmic::iced::widget::{column, row, space};
 use cosmic::iced::window::Id;
 use cosmic::iced::{Alignment, Event, Length, Limits, Subscription, event};
@@ -22,9 +21,12 @@ use cosmic::theme;
 use cosmic::widget::{button, divider, icon, scrollable, text};
 
 use crate::activation;
+use crate::cast_screencast;
+use crate::cast_sdk;
 use crate::config::Config;
 use crate::fcast;
 use crate::fl;
+use crate::portal;
 
 /// Size of the icons used inside popup rows.
 const ICON_SIZE: u16 = 16;
@@ -60,11 +62,22 @@ pub struct AppModel {
     share: Option<ShareStatus>,
     /// The portal session backing the running share. Kept alive so the
     /// share can be stopped with `Message::StopShare`.
-    share_session: Option<ShareSession>,
+    share_session: Option<portal::SessionHandle>,
     /// True while the portal selection dialog is open.
     share_pending: bool,
     /// The last error from starting a share, shown in the popup.
     share_error: Option<String>,
+    /// The active cast connection to a wireless receiver, if any.
+    cast: Option<cast_sdk::CastHandle>,
+    /// True while the cast is connecting or waiting for the portal capture.
+    cast_pending: bool,
+    /// Our local address on the cast connection, reported by the receiver
+    /// handshake; the receiver fetches the stream from this address.
+    cast_addr: Option<std::net::IpAddr>,
+    /// The capture and streaming state of the active cast.
+    cast_stream: Option<CastStreamState>,
+    /// The last error from starting a cast, shown in the popup.
+    cast_error: Option<String>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -86,7 +99,10 @@ pub enum Message {
     /// Start sharing a single window (the portal dialog asks which one).
     StartShareWindow,
     /// The screen cast portal finished selecting a source.
-    ShareStarted(ShareTarget, Result<(ShareStream, ShareSession), String>),
+    ShareStarted(
+        ShareTarget,
+        Result<(portal::ShareStream, portal::SessionHandle), String>,
+    ),
     /// The user cancelled the portal selection dialog.
     ShareCancelled,
     /// Stop the running share and close its portal session.
@@ -95,9 +111,21 @@ pub enum Message {
     ShareStopped,
     /// The portal closed the session that `session` refers to — from either
     /// side — so the share is no longer active.
-    SessionClosed(ShareSession),
+    SessionClosed(portal::SessionHandle),
     /// Dismiss the share error shown in the popup.
     DismissShareError,
+    /// Connect to and cast to a wireless receiver.
+    CastConnect(Box<fcast::FcastReceiver>),
+    /// An event from the cast control connection.
+    CastEvent(cast_sdk::CastEvent),
+    /// The portal capture for the cast finished (or failed).
+    CastCapture(Result<(portal::ShareStream, portal::SessionHandle), String>),
+    /// Stop the active cast and close its capture session.
+    CastStop,
+    /// The capture session of the cast has been closed.
+    CastStopped,
+    /// Dismiss the cast error shown in the popup.
+    DismissCastError,
 }
 
 impl cosmic::Application for AppModel {
@@ -147,6 +175,11 @@ impl cosmic::Application for AppModel {
             share_session: None,
             share_pending: false,
             share_error: None,
+            cast: None,
+            cast_pending: false,
+            cast_addr: None,
+            cast_stream: None,
+            cast_error: None,
         };
 
         (app, Task::none())
@@ -159,8 +192,8 @@ impl cosmic::Application for AppModel {
     /// Draw the applet button in the panel.
     fn view(&self) -> Element<'_, Self::Message> {
         let mut button = self.core.applet.icon_button("display-projector-symbolic");
-        // Highlight the button while a share is running.
-        if self.share.is_some() {
+        // Highlight the button while a share or cast is running.
+        if self.share.is_some() || self.cast.is_some() {
             button = button.selected(true);
         }
         button.on_press(Message::TogglePopup).into()
@@ -261,6 +294,14 @@ impl cosmic::Application for AppModel {
             | Message::ShareStopped
             | Message::SessionClosed(..)
             | Message::DismissShareError => self.update_share(message),
+
+            // Wireless casting.
+            Message::CastConnect(..)
+            | Message::CastEvent(..)
+            | Message::CastCapture(..)
+            | Message::CastStop
+            | Message::CastStopped
+            | Message::DismissCastError => self.update_cast(message),
         }
     }
 
@@ -361,10 +402,6 @@ impl OutputState {
 // Screen sharing
 // ---------------------------------------------------------------------------
 
-/// A handle to an active screen cast portal session, shared between the
-/// message that starts the share and the model that later stops it.
-type ShareSession = Arc<Session<Screencast>>;
-
 /// What a screen share captures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShareTarget {
@@ -384,61 +421,32 @@ impl ShareTarget {
     }
 }
 
-/// A live capture stream from the screencast portal.
-#[derive(Debug, Clone)]
-pub struct ShareStream {
-    /// The `PipeWire` node id of the capture stream.
-    node_id: u32,
-    /// The size of the captured stream in compositor coordinates, when the
-    /// portal reports one.
-    size: Option<(i32, i32)>,
-}
-
 /// A running screen share.
 #[derive(Debug, Clone)]
 pub struct ShareStatus {
     /// The live capture stream.
-    stream: ShareStream,
+    stream: portal::ShareStream,
     /// What is being shared.
     target: ShareTarget,
 }
 
-/// Runs a screen cast session through the `XDG` Desktop Portal and returns
-/// the `PipeWire` node id of the capture stream, together with the session
-/// handle that must be kept alive (and later closed) to stop the share.
-async fn run_screencast(source: SourceType) -> anyhow::Result<(ShareStream, Session<Screencast>)> {
-    let proxy = Screencast::new().await?;
-    let session = proxy
-        .create_session(CreateSessionOptions::default())
-        .await?;
-    proxy
-        .select_sources(
-            &session,
-            SelectSourcesOptions::default()
-                .set_sources(Some(source.into()))
-                .set_multiple(false)
-                .set_cursor_mode(CursorMode::Embedded)
-                .set_persist_mode(PersistMode::DoNot),
-        )
-        .await?;
-    let response = proxy
-        .start(&session, None, StartCastOptions::default())
-        .await?
-        .response()?;
-    let stream = response
-        .streams()
-        .first()
-        .map(|stream| ShareStream {
-            node_id: stream.pipe_wire_node_id(),
-            size: stream.size(),
-        })
-        .ok_or_else(|| anyhow::anyhow!("no stream was selected"))?;
-    Ok((stream, session))
+/// The capture and streaming state of an active wireless cast.
+pub struct CastStreamState {
+    /// The receiver the stream is being cast to.
+    receiver: String,
+    /// The portal capture stream.
+    stream: portal::ShareStream,
+    /// The portal session, kept alive (and later closed) with the cast.
+    session: portal::SessionHandle,
+    /// The URL the receiver fetches the stream from.
+    url: String,
+    /// The local server that serves the stream to the receiver.
+    _streamer: cast_screencast::TcpStreamer,
 }
 
 /// Waits until the portal closes `session` — from either side — and reports
 /// it, so the UI can drop a stale running-share row.
-async fn monitor_session(session: ShareSession) -> Message {
+async fn monitor_session(session: portal::SessionHandle) -> Message {
     use cosmic::iced::futures::StreamExt;
 
     // The signal stream borrows `session` (Rust 2024 `impl Trait` capture),
@@ -614,7 +622,7 @@ impl AppModel {
             ),
             wired_section(&self.outputs, self.can_start_share()),
             divider().into(),
-            wireless_section(&self.fcast_receivers),
+            wireless_section(&self.fcast_receivers, self.can_start_share()),
         ];
 
         if self.share_pending {
@@ -639,6 +647,22 @@ impl AppModel {
             children.push(share_error_row(error));
         }
 
+        if self.cast_pending {
+            let name = self
+                .cast
+                .as_ref()
+                .map_or_else(String::new, |cast| cast.name().to_owned());
+            children.push(cast_pending_row(name));
+        }
+
+        if let Some(stream) = &self.cast_stream {
+            children.push(cast_status_row(stream));
+        }
+
+        if let Some(error) = &self.cast_error {
+            children.push(cast_error_row(error));
+        }
+
         let content = column::with_children(children)
             .padding([space_xxs, 0])
             .spacing(0);
@@ -648,7 +672,7 @@ impl AppModel {
 
     /// Whether a new share can be started right now.
     fn can_start_share(&self) -> bool {
-        self.share.is_none() && !self.share_pending
+        self.share.is_none() && !self.share_pending && self.cast.is_none() && !self.cast_pending
     }
 
     /// Start a screen cast for `target`, unless another share is already
@@ -663,7 +687,7 @@ impl AppModel {
         let source = target.source_type();
 
         cosmic::task::future(async move {
-            match run_screencast(source).await {
+            match portal::run_screencast(source).await {
                 Ok((stream, session)) => {
                     Message::ShareStarted(target, Ok((stream, Arc::new(session))))
                 }
@@ -684,6 +708,138 @@ impl AppModel {
                 }
             }
         })
+    }
+
+    /// Handles messages related to casting to a wireless receiver.
+    fn update_cast(&mut self, message: Message) -> Task<cosmic::Action<Message>> {
+        match message {
+            // The user picked a receiver: connect the control channel.
+            Message::CastConnect(receiver) => self.start_cast(&receiver),
+
+            // The control connection reported a state change.
+            Message::CastEvent(event) => match event {
+                cast_sdk::CastEvent::Connected { local_addr } => {
+                    // Remember our reachable address, then ask the portal for
+                    // a capture to stream to the receiver.
+                    self.cast_addr = Some(local_addr);
+                    cosmic::task::future(async {
+                        match portal::run_screencast(SourceType::Monitor).await {
+                            Ok((stream, session)) => {
+                                Message::CastCapture(Ok((stream, Arc::new(session))))
+                            }
+                            Err(error) => Message::CastCapture(Err(error.to_string())),
+                        }
+                    })
+                }
+                cast_sdk::CastEvent::Disconnected => {
+                    // The receiver went away or we stopped the cast; drop the
+                    // whole cast state.
+                    self.cast = None;
+                    self.cast_pending = false;
+                    self.cast_addr = None;
+                    self.cast_stream = None;
+                    Task::none()
+                }
+                cast_sdk::CastEvent::Playback { playing } => {
+                    log::debug!("receiver playback state: playing={playing}");
+                    Task::none()
+                }
+                cast_sdk::CastEvent::Error(error) => {
+                    self.cast_error = Some(error);
+                    Task::none()
+                }
+            },
+
+            // The portal capture for the cast finished; start streaming it.
+            Message::CastCapture(Ok((stream, session))) => {
+                let Some(local_addr) = self.cast_addr else {
+                    return Task::none();
+                };
+                let Some(handle) = self.cast.as_ref() else {
+                    return Task::none();
+                };
+                let streamer = match cast_screencast::TcpStreamer::start() {
+                    Ok(streamer) => streamer,
+                    Err(error) => {
+                        self.cast_error = Some(error.to_string());
+                        return Task::none();
+                    }
+                };
+                let url = streamer.url(local_addr);
+                if let Err(error) = handle.load(url.clone(), "video/webm".to_owned()) {
+                    self.cast_error = Some(error);
+                    return Task::none();
+                }
+                self.cast_stream = Some(CastStreamState {
+                    receiver: handle.name().to_owned(),
+                    stream,
+                    session,
+                    url,
+                    _streamer: streamer,
+                });
+                self.cast_pending = false;
+                Task::none()
+            }
+
+            // The portal capture failed; tear the cast down.
+            Message::CastCapture(Err(error)) => {
+                self.cast_pending = false;
+                self.cast_error = Some(error);
+                self.cast = None;
+                self.cast_addr = None;
+                Task::none()
+            }
+
+            // The user stopped the cast.
+            Message::CastStop => {
+                if let Some(handle) = self.cast.take() {
+                    handle.stop();
+                }
+                self.cast_pending = false;
+                self.cast_addr = None;
+                let session = self.cast_stream.take().map(|state| state.session);
+                if let Some(session) = session {
+                    cosmic::task::future(async move {
+                        let _ = session.close().await;
+                        Message::CastStopped
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+
+            // The capture session has been closed; nothing to update.
+            Message::DismissCastError => {
+                self.cast_error = None;
+                Task::none()
+            }
+
+            _ => Task::none(),
+        }
+    }
+
+    /// Connect to `receiver` and start a cast, unless one is already
+    /// running or waiting.
+    fn start_cast(&mut self, receiver: &fcast::FcastReceiver) -> Task<cosmic::Action<Message>> {
+        if !self.can_start_share() {
+            return Task::none();
+        }
+
+        let (events, event_rx) = cosmic::iced::futures::channel::mpsc::unbounded();
+        let handle = match cast_sdk::connect(receiver, events) {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.cast_error = Some(error.to_string());
+                return Task::none();
+            }
+        };
+
+        self.cast = Some(handle);
+        self.cast_pending = true;
+        self.cast_error = None;
+        // Bridge the SDK's events into the app's message loop. The task ends
+        // when the cast connection drops (all event senders are gone).
+        cosmic::task::stream(cast_sdk::event_stream(event_rx).map(Message::CastEvent))
     }
 }
 
@@ -761,7 +917,7 @@ fn display_row(output: &OutputState, can_start: bool) -> Element<'_, Message> {
 }
 
 /// The list of wireless `FCast` receivers discovered on the network.
-fn wireless_section(receivers: &[fcast::FcastReceiver]) -> Element<'_, Message> {
+fn wireless_section(receivers: &[fcast::FcastReceiver], can_start: bool) -> Element<'_, Message> {
     let Spacing {
         space_s, space_m, ..
     } = theme::active().cosmic().spacing;
@@ -774,15 +930,19 @@ fn wireless_section(receivers: &[fcast::FcastReceiver]) -> Element<'_, Message> 
     if receivers.is_empty() {
         children.push(padded_control(text::caption(fl!("no-wireless-receivers"))).into());
     } else {
-        children.extend(receivers.iter().map(fcast_receiver_row));
+        children.extend(
+            receivers
+                .iter()
+                .map(|receiver| fcast_receiver_row(receiver, can_start)),
+        );
     }
 
     column::with_children(children).into()
 }
 
-/// A single discovered receiver: name, address, and an honest note that
-/// casting to it is not implemented yet (no public `FCast` sender API).
-fn fcast_receiver_row(receiver: &fcast::FcastReceiver) -> Element<'_, Message> {
+/// A single discovered receiver: name, address, and a connect-and-cast
+/// action.
+fn fcast_receiver_row(receiver: &fcast::FcastReceiver, can_start: bool) -> Element<'_, Message> {
     let Spacing {
         space_xxs, space_s, ..
     } = theme::active().cosmic().spacing;
@@ -792,20 +952,19 @@ fn fcast_receiver_row(receiver: &fcast::FcastReceiver) -> Element<'_, Message> {
         (None, port) => format!("{}:{port}", receiver.host),
     };
 
-    padded_control(
+    menu_button(
         row![
             icon::from_name("network-wireless-symbolic").size(ICON_SIZE),
-            column![
-                text::body(&receiver.name),
-                text::caption(format!("{meta} · {}", fl!("fcast-unsupported"))),
-            ]
-            .spacing(space_xxs)
-            .align_x(Alignment::Start),
+            column![text::body(&receiver.name), text::caption(meta),]
+                .spacing(space_xxs)
+                .align_x(Alignment::Start),
             space::horizontal(),
+            icon::from_name("media-playback-start-symbolic").size(ICON_SIZE),
         ]
         .align_y(Alignment::Center)
         .spacing(space_s),
     )
+    .on_press_maybe(can_start.then_some(Message::CastConnect(Box::new(receiver.clone()))))
     .into()
 }
 
@@ -855,6 +1014,74 @@ fn share_error_row(error: &str) -> Element<'_, Message> {
             text::body(error),
             space::horizontal(),
             button::standard(fl!("dismiss")).on_press(Message::DismissShareError),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .into()
+}
+
+/// A row shown while the cast is connecting to a receiver.
+fn cast_pending_row(name: String) -> Element<'static, Message> {
+    let Spacing { space_s, .. } = theme::active().cosmic().spacing;
+
+    padded_control(
+        row![
+            cosmic::widget::progress_bar::indeterminate_circular().size(16.0),
+            text::body(fl!("cast-waiting", name = name)),
+            space::horizontal(),
+            button::destructive(fl!("cast-stop")).on_press(Message::CastStop),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .into()
+}
+
+/// A row describing the active cast, with a stop button.
+fn cast_status_row(state: &CastStreamState) -> Element<'_, Message> {
+    let Spacing {
+        space_xxs, space_s, ..
+    } = theme::active().cosmic().spacing;
+
+    let caption = match state.stream.size {
+        Some((width, height)) => fl!(
+            "cast-stream",
+            node = state.stream.node_id,
+            width = width,
+            height = height,
+        ),
+        None => fl!("cast-node", node = state.stream.node_id),
+    };
+
+    padded_control(
+        row![
+            icon::from_name("network-wireless-symbolic").size(ICON_SIZE),
+            column![
+                text::body(fl!("cast-active", name = state.receiver.as_str())),
+                text::caption(format!("{caption} · {}", state.url)),
+            ]
+            .spacing(space_xxs)
+            .align_x(Alignment::Start),
+            space::horizontal(),
+            button::destructive(fl!("cast-stop")).on_press(Message::CastStop),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
+    .into()
+}
+
+/// A row showing the last cast error, with a dismiss button.
+fn cast_error_row(error: &str) -> Element<'_, Message> {
+    let Spacing { space_s, .. } = theme::active().cosmic().spacing;
+
+    padded_control(
+        row![
+            icon::from_name("dialog-error-symbolic").size(ICON_SIZE),
+            text::body(error),
+            space::horizontal(),
+            button::standard(fl!("dismiss")).on_press(Message::DismissCastError),
         ]
         .align_y(Alignment::Center)
         .spacing(space_s),

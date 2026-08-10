@@ -10,6 +10,11 @@ repository = "https://github.com/nalladev/cosmic-ext-applet-screen-sharing"
 anyhow = "1"
 ashpd = { version = "0.13.13", features = ["screencast", "tokio"] }
 env_logger = "0.11"
+# Pinned to the revision shipped with the official `org.fcast.Sender` flatpak
+# (tag `sender-0.0.3-beta`). The SDK is an internal crate of the fcast repo and
+# is not stable on crates.io; mirroring-core (GStreamer/WebRTC) is not needed
+# for the direct TCP streaming path, so only the lean `fcast` feature is used.
+fcast-sender-sdk = { git = "https://github.com/futo-org/fcast.git", rev = "09c67f7", default-features = false, features = ["fcast"] }
 i18n-embed-fl = "0.10"
 log = "0.4"
 mdns-sd = "0.20.3"
