@@ -51,16 +51,16 @@ features = [
 license-file = "LICENSE"
 assets = [
   ["target/release/cosmic-ext-applet-screen-sharing", "usr/bin/", "755"],
-  ["resources/app.desktop", "usr/share/applications/io.github.nalladev.CosmicExtAppletScreenSharing.desktop", "644"],
-  ["resources/app.metainfo.xml", "usr/share/appdata/io.github.nalladev.CosmicExtAppletScreenSharing.metainfo.xml", "644"],
-  ["resources/icon.svg", "usr/share/icons/hicolor/scalable/apps/io.github.nalladev.CosmicExtAppletScreenSharing-symbolic.svg", "644"],
+  ["resources/app.desktop", "usr/share/applications/io.github.nalladev.cosmic-ext-applet-screen-sharing.desktop", "644"],
+  ["resources/app.metainfo.xml", "usr/share/appdata/io.github.nalladev.cosmic-ext-applet-screen-sharing.metainfo.xml", "644"],
+  ["resources/icon.svg", "usr/share/icons/hicolor/scalable/apps/io.github.nalladev.cosmic-ext-applet-screen-sharing-symbolic.svg", "644"],
 ]
 
 [package.metadata.generate-rpm]
 assets = [
   { source = "target/release/cosmic-ext-applet-screen-sharing", dest = "/usr/bin/cosmic-ext-applet-screen-sharing", mode = "755" },
   { source = "LICENSE", dest = "/usr/share/doc/cosmic-ext-applet-screen-sharing/LICENSE", doc = true, mode = "644" },
-  { source = "resources/app.desktop", dest = "/usr/share/applications/io.github.nalladev.CosmicExtAppletScreenSharing.desktop", mode = "644" },
-  { source = "resources/app.metainfo.xml", dest = "/usr/share/appdata/io.github.nalladev.CosmicExtAppletScreenSharing.metainfo.xml", mode = "644" },
-  { source = "resources/icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.nalladev.CosmicExtAppletScreenSharing-symbolic.svg", mode = "644" },
+  { source = "resources/app.desktop", dest = "/usr/share/applications/io.github.nalladev.cosmic-ext-applet-screen-sharing.desktop", mode = "644" },
+  { source = "resources/app.metainfo.xml", dest = "/usr/share/appdata/io.github.nalladev.cosmic-ext-applet-screen-sharing.metainfo.xml", mode = "644" },
+  { source = "resources/icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.nalladev.cosmic-ext-applet-screen-sharing-symbolic.svg", mode = "644" },
 ]

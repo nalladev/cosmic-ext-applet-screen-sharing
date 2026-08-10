@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ashpd::desktop::screencast::{
-    CursorMode, Screencast, SelectSourcesOptions, SourceType, StartCastOptions, Stream,
+    CursorMode, Screencast, SelectSourcesOptions, SourceType, StartCastOptions,
 };
 use ashpd::desktop::{CreateSessionOptions, PersistMode, ResponseError, Session};
 use cosmic::applet::{menu_button, padded_control};
@@ -80,7 +80,7 @@ pub enum Message {
     /// Start sharing a single window (the portal dialog asks which one).
     StartShareWindow,
     /// The screen cast portal finished selecting a source.
-    ShareStarted(ShareTarget, Result<(u32, ShareSession), String>),
+    ShareStarted(ShareTarget, Result<(ShareStream, ShareSession), String>),
     /// The user cancelled the portal selection dialog.
     ShareCancelled,
     /// Stop the running share and close its portal session.
@@ -364,11 +364,21 @@ impl ShareTarget {
     }
 }
 
+/// A live capture stream from the screencast portal.
+#[derive(Debug, Clone)]
+pub struct ShareStream {
+    /// The `PipeWire` node id of the capture stream.
+    node_id: u32,
+    /// The size of the captured stream in compositor coordinates, when the
+    /// portal reports one.
+    size: Option<(i32, i32)>,
+}
+
 /// A running screen share.
 #[derive(Debug, Clone)]
 pub struct ShareStatus {
-    /// The `PipeWire` node id of the capture stream.
-    node_id: u32,
+    /// The live capture stream.
+    stream: ShareStream,
     /// What is being shared.
     target: ShareTarget,
 }
@@ -376,7 +386,7 @@ pub struct ShareStatus {
 /// Runs a screen cast session through the `XDG` Desktop Portal and returns
 /// the `PipeWire` node id of the capture stream, together with the session
 /// handle that must be kept alive (and later closed) to stop the share.
-async fn run_screencast(source: SourceType) -> anyhow::Result<(u32, Session<Screencast>)> {
+async fn run_screencast(source: SourceType) -> anyhow::Result<(ShareStream, Session<Screencast>)> {
     let proxy = Screencast::new().await?;
     let session = proxy
         .create_session(CreateSessionOptions::default())
@@ -395,12 +405,15 @@ async fn run_screencast(source: SourceType) -> anyhow::Result<(u32, Session<Scre
         .start(&session, None, StartCastOptions::default())
         .await?
         .response()?;
-    let node_id = response
+    let stream = response
         .streams()
         .first()
-        .map(Stream::pipe_wire_node_id)
+        .map(|stream| ShareStream {
+            node_id: stream.pipe_wire_node_id(),
+            size: stream.size(),
+        })
         .ok_or_else(|| anyhow::anyhow!("no stream was selected"))?;
-    Ok((node_id, session))
+    Ok((stream, session))
 }
 
 // ---------------------------------------------------------------------------
@@ -473,9 +486,9 @@ impl AppModel {
             Message::StartShareWindow => self.start_share(ShareTarget::Window),
 
             // The portal reported a live capture stream.
-            Message::ShareStarted(target, Ok((node_id, session))) => {
+            Message::ShareStarted(target, Ok((stream, session))) => {
                 self.share_pending = false;
-                self.share = Some(ShareStatus { node_id, target });
+                self.share = Some(ShareStatus { stream, target });
                 self.share_session = Some(session);
                 Task::none()
             }
@@ -530,7 +543,16 @@ impl AppModel {
         let mut children: Vec<Element<'_, Message>> = vec![
             padded_control(heading).into(),
             divider().into(),
-            share_window_row(self.can_start_share()),
+            action_row(
+                "display-projector-symbolic",
+                fl!("share-screen"),
+                self.can_start_share().then_some(Message::StartShareScreen),
+            ),
+            action_row(
+                "computer-symbolic",
+                fl!("share-window"),
+                self.can_start_share().then_some(Message::StartShareWindow),
+            ),
             wired_section(&self.outputs, self.can_start_share()),
             divider().into(),
             wireless_section(),
@@ -583,8 +605,8 @@ impl AppModel {
 
         cosmic::task::future(async move {
             match run_screencast(source).await {
-                Ok((node_id, session)) => {
-                    Message::ShareStarted(target, Ok((node_id, Arc::new(session))))
+                Ok((stream, session)) => {
+                    Message::ShareStarted(target, Ok((stream, Arc::new(session))))
                 }
                 Err(error) => {
                     // Cancelling the dialog is not an error.
@@ -601,21 +623,25 @@ impl AppModel {
     }
 }
 
-/// A row that starts sharing a single window.
-fn share_window_row(can_start: bool) -> Element<'static, Message> {
+/// A row that starts a share, for a given source type.
+fn action_row(
+    icon_name: &str,
+    label: String,
+    action: Option<Message>,
+) -> Element<'static, Message> {
     let Spacing { space_s, .. } = theme::active().cosmic().spacing;
 
     menu_button(
         row![
-            icon::from_name("computer-symbolic").size(ICON_SIZE),
-            text::body(fl!("share-window")),
+            icon::from_name(icon_name).size(ICON_SIZE),
+            text::body(label),
             space::horizontal(),
             icon::from_name("media-playback-start-symbolic").size(ICON_SIZE),
         ]
         .align_y(Alignment::Center)
         .spacing(space_s),
     )
-    .on_press_maybe(can_start.then_some(Message::StartShareWindow))
+    .on_press_maybe(action)
     .into()
 }
 
@@ -701,15 +727,22 @@ fn share_status_row(status: &ShareStatus) -> Element<'_, Message> {
         ShareTarget::Window => fl!("share-active-window"),
     };
 
+    let caption = match status.stream.size {
+        Some((width, height)) => fl!(
+            "share-stream",
+            node = status.stream.node_id,
+            width = width,
+            height = height,
+        ),
+        None => fl!("share-node", node = status.stream.node_id),
+    };
+
     padded_control(
         row![
             icon::from_name("media-playback-stop-symbolic").size(ICON_SIZE),
-            column![
-                text::body(label),
-                text::caption(fl!("share-node", node = status.node_id)),
-            ]
-            .spacing(space_xxs)
-            .align_x(Alignment::Start),
+            column![text::body(label), text::caption(caption),]
+                .spacing(space_xxs)
+                .align_x(Alignment::Start),
             space::horizontal(),
             button::destructive(fl!("stop-share")).on_press(Message::StopShare),
         ]
@@ -742,7 +775,7 @@ fn share_error_row(error: &str) -> Element<'_, Message> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputKind, classify_output};
+    use super::{OutputKind, ShareTarget, classify_output};
 
     /// Connector-name classification for the display list.
     #[test]
@@ -757,5 +790,14 @@ mod tests {
         assert_eq!(classify_output("X11-1"), OutputKind::Virtual);
         assert_eq!(classify_output("Virtual-1"), OutputKind::Virtual);
         assert_eq!(classify_output("Mystery-1"), OutputKind::Unknown);
+    }
+
+    /// The portal source type for each share target.
+    #[test]
+    fn share_target_source_type() {
+        use ashpd::desktop::screencast::SourceType;
+
+        assert_eq!(ShareTarget::Screen.source_type(), SourceType::Monitor);
+        assert_eq!(ShareTarget::Window.source_type(), SourceType::Window);
     }
 }
