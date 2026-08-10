@@ -752,11 +752,13 @@ impl AppModel {
 
             // The portal capture for the cast finished; start streaming it.
             Message::CastCapture(Ok((stream, session))) => {
-                let Some(local_addr) = self.cast_addr else {
-                    return Task::none();
-                };
-                let Some(handle) = self.cast.as_ref() else {
-                    return Task::none();
+                let (Some(local_addr), Some(handle)) = (self.cast_addr, self.cast.as_ref()) else {
+                    // The cast was stopped while the portal dialog was open;
+                    // close the late session instead of leaking it.
+                    return cosmic::task::future(async move {
+                        let _ = session.close().await;
+                        Message::CastStopped
+                    });
                 };
                 let streamer = match cast_screencast::TcpStreamer::start() {
                     Ok(streamer) => streamer,
