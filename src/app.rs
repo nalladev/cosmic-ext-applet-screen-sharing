@@ -148,11 +148,12 @@ impl cosmic::Application for AppModel {
 
     /// Draw the applet button in the panel.
     fn view(&self) -> Element<'_, Self::Message> {
-        self.core
-            .applet
-            .icon_button("display-projector-symbolic")
-            .on_press(Message::TogglePopup)
-            .into()
+        let mut button = self.core.applet.icon_button("display-projector-symbolic");
+        // Highlight the button while a share is running.
+        if self.share.is_some() {
+            button = button.selected(true);
+        }
+        button.on_press(Message::TogglePopup).into()
     }
 
     /// Draw a window — the applet's popup.
@@ -806,5 +807,12 @@ mod tests {
 
         assert_eq!(ShareTarget::Screen.source_type(), SourceType::Monitor);
         assert_eq!(ShareTarget::Window.source_type(), SourceType::Window);
+    }
+
+    /// The embedded fallback language parses without errors; accessing the
+    /// loader panics if the bundled FTL is invalid.
+    #[test]
+    fn fallback_language_loads() {
+        drop(crate::i18n::localizer());
     }
 }
