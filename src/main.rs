@@ -3,6 +3,7 @@
 mod activation;
 mod app;
 mod config;
+mod fcast;
 mod i18n;
 
 use app::Flags;

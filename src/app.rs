@@ -23,6 +23,7 @@ use cosmic::widget::{button, divider, icon, scrollable, text};
 
 use crate::activation;
 use crate::config::Config;
+use crate::fcast;
 use crate::fl;
 
 /// Size of the icons used inside popup rows.
@@ -52,6 +53,9 @@ pub struct AppModel {
     /// Displays (outputs) currently known to the compositor, kept up to
     /// date by `Message::OutputEvent`.
     outputs: Vec<OutputState>,
+    /// Wireless `FCast` receivers discovered on the local network, kept up
+    /// to date by `Message::FcastReceivers`.
+    fcast_receivers: Vec<fcast::FcastReceiver>,
     /// The currently running screen share, if any.
     share: Option<ShareStatus>,
     /// The portal session backing the running share. Kept alive so the
@@ -75,6 +79,8 @@ pub enum Message {
     /// A Wayland output (display) was created, removed, or changed
     /// geometry — i.e. a hotplug event.
     OutputEvent(Box<OutputEvent>, WlOutput),
+    /// The set of `FCast` receivers visible on the network changed.
+    FcastReceivers(Vec<fcast::FcastReceiver>),
     /// Start sharing the entire screen.
     StartShareScreen,
     /// Start sharing a single window (the portal dialog asks which one).
@@ -136,6 +142,7 @@ impl cosmic::Application for AppModel {
             config,
             popup: None,
             outputs: Vec::new(),
+            fcast_receivers: Vec::new(),
             share: None,
             share_session: None,
             share_pending: false,
@@ -185,6 +192,8 @@ impl cosmic::Application for AppModel {
                 )) => Some(Message::OutputEvent(Box::new(o_event), wl_output)),
                 _ => None,
             }),
+            // mDNS discovery of wireless FCast receivers.
+            Subscription::run_with(fcast::DiscoverId, fcast::discover).map(Message::FcastReceivers),
         ])
     }
 
@@ -234,6 +243,12 @@ impl cosmic::Application for AppModel {
             // A display was plugged in, unplugged, or changed geometry.
             Message::OutputEvent(o_event, wl_output) => {
                 self.update_output_event(*o_event, wl_output);
+                Task::none()
+            }
+
+            // The set of wireless FCast receivers changed.
+            Message::FcastReceivers(receivers) => {
+                self.fcast_receivers = receivers;
                 Task::none()
             }
 
@@ -599,7 +614,7 @@ impl AppModel {
             ),
             wired_section(&self.outputs, self.can_start_share()),
             divider().into(),
-            wireless_section(),
+            wireless_section(&self.fcast_receivers),
         ];
 
         if self.share_pending {
@@ -745,25 +760,52 @@ fn display_row(output: &OutputState, can_start: bool) -> Element<'_, Message> {
     .into()
 }
 
-/// The wireless receivers section (a stub until `FCast` is supported).
-fn wireless_section() -> Element<'static, Message> {
+/// The list of wireless `FCast` receivers discovered on the network.
+fn wireless_section(receivers: &[fcast::FcastReceiver]) -> Element<'_, Message> {
     let Spacing {
         space_s, space_m, ..
     } = theme::active().cosmic().spacing;
 
-    column![
-        cosmic::widget::container(text::caption_heading(fl!("section-wireless")))
-            .padding([space_s, space_m])
-            .width(Length::Fill),
-        padded_control(
-            row![
-                icon::from_name("network-wireless-symbolic").size(ICON_SIZE),
-                text::caption(fl!("wireless-stub")),
+    let header = cosmic::widget::container(text::caption_heading(fl!("section-wireless")))
+        .padding([space_s, space_m])
+        .width(Length::Fill);
+
+    let mut children: Vec<Element<'_, Message>> = vec![header.into()];
+    if receivers.is_empty() {
+        children.push(padded_control(text::caption(fl!("no-wireless-receivers"))).into());
+    } else {
+        children.extend(receivers.iter().map(fcast_receiver_row));
+    }
+
+    column::with_children(children).into()
+}
+
+/// A single discovered receiver: name, address, and an honest note that
+/// casting to it is not implemented yet (no public `FCast` sender API).
+fn fcast_receiver_row(receiver: &fcast::FcastReceiver) -> Element<'_, Message> {
+    let Spacing {
+        space_xxs, space_s, ..
+    } = theme::active().cosmic().spacing;
+
+    let meta = match (receiver.addr, receiver.port) {
+        (Some(addr), port) => format!("{addr}:{port}"),
+        (None, port) => format!("{}:{port}", receiver.host),
+    };
+
+    padded_control(
+        row![
+            icon::from_name("network-wireless-symbolic").size(ICON_SIZE),
+            column![
+                text::body(&receiver.name),
+                text::caption(format!("{meta} · {}", fl!("fcast-unsupported"))),
             ]
-            .align_y(Alignment::Center)
-            .spacing(space_s),
-        ),
-    ]
+            .spacing(space_xxs)
+            .align_x(Alignment::Start),
+            space::horizontal(),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(space_s),
+    )
     .into()
 }
 
