@@ -87,6 +87,9 @@ pub enum Message {
     StopShare,
     /// The share session has been closed.
     ShareStopped,
+    /// The portal closed the session that `session` refers to — from either
+    /// side — so the share is no longer active.
+    SessionClosed(ShareSession),
     /// Dismiss the share error shown in the popup.
     DismissShareError,
 }
@@ -241,6 +244,7 @@ impl cosmic::Application for AppModel {
             | Message::ShareCancelled
             | Message::StopShare
             | Message::ShareStopped
+            | Message::SessionClosed(..)
             | Message::DismissShareError => self.update_share(message),
         }
     }
@@ -417,6 +421,27 @@ async fn run_screencast(source: SourceType) -> anyhow::Result<(ShareStream, Sess
     Ok((stream, session))
 }
 
+/// Waits until the portal closes `session` — from either side — and reports
+/// it, so the UI can drop a stale running-share row.
+async fn monitor_session(session: ShareSession) -> Message {
+    use cosmic::iced::futures::StreamExt;
+
+    // The signal stream borrows `session` (Rust 2024 `impl Trait` capture),
+    // so the message carries a clone of the `Arc`; identity is preserved.
+    let subscription = session.receive_closed().await;
+    let mut closed = match subscription {
+        Ok(closed) => closed,
+        Err(error) => {
+            // Without the subscription the share state is best-effort; the
+            // portal session is most likely gone already.
+            log::debug!("could not subscribe to session close: {error}");
+            return Message::SessionClosed(session.clone());
+        }
+    };
+    let _ = closed.next().await;
+    Message::SessionClosed(session.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Helper methods on AppModel
 // ---------------------------------------------------------------------------
@@ -490,8 +515,10 @@ impl AppModel {
             Message::ShareStarted(target, Ok((stream, session))) => {
                 self.share_pending = false;
                 self.share = Some(ShareStatus { stream, target });
-                self.share_session = Some(session);
-                Task::none()
+                self.share_session = Some(session.clone());
+                // Watch for the portal closing the session (e.g. the
+                // compositor ends the capture) to clear the status row.
+                cosmic::task::future(monitor_session(session))
             }
 
             // The portal (or D-Bus) reported an error.
@@ -519,6 +546,22 @@ impl AppModel {
                 } else {
                     Task::none()
                 }
+            }
+
+            // The portal closed the session; only clear the status if this
+            // is still the tracked share (a late signal from an earlier
+            // session must not clear a newer one).
+            Message::SessionClosed(session) => {
+                if self
+                    .share_session
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &session))
+                {
+                    self.share = None;
+                    self.share_session = None;
+                    self.share_pending = false;
+                }
+                Task::none()
             }
 
             Message::DismissShareError => {
