@@ -614,7 +614,12 @@ impl AppModel {
                         error.downcast_ref::<ashpd::Error>()
                     {
                         Message::ShareCancelled
+                    } else if error.downcast_ref::<ashpd::Error>().is_some() {
+                        // The portal returned a plain failure; it carries no
+                        // useful detail, so show a friendly message.
+                        Message::ShareStarted(target, Err(fl!("share-error-portal")))
                     } else {
+                        // D-Bus / transport failures: keep the raw message.
                         Message::ShareStarted(target, Err(error.to_string()))
                     }
                 }
@@ -656,10 +661,12 @@ fn wired_section(outputs: &[OutputState], can_start: bool) -> Element<'_, Messag
         .width(Length::Fill);
 
     let mut children: Vec<Element<'_, Message>> = vec![header.into()];
-    let wired: Vec<&OutputState> = outputs
+    let mut wired: Vec<&OutputState> = outputs
         .iter()
         .filter(|o| o.kind() == OutputKind::Wired)
         .collect();
+    // Keep the list stable regardless of hotplug order.
+    wired.sort_by_key(|output| &output.name);
 
     if wired.is_empty() {
         children.push(padded_control(text::caption(fl!("no-wired-displays"))).into());

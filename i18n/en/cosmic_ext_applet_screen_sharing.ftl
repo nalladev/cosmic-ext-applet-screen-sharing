@@ -10,5 +10,6 @@ share-active-screen = Sharing the screen
 share-active-window = Sharing a window
 share-node = PipeWire node { $node }
 share-stream = PipeWire node { $node } · { $width }×{ $height }
+share-error-portal = Could not start the share.
 stop-share = Stop sharing
 dismiss = Dismiss
